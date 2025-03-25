@@ -2,8 +2,11 @@
 
 namespace Illuminate\Tests\Benchmarks;
 
+use Illuminate\Contracts\Database\Eloquent\Castable;
+use Illuminate\Contracts\Database\Eloquent\CastsAttributes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Tests\Benchmarks\Support\BenchmarkEnum;
 use PhpBench\Attributes\BeforeMethods;
 use PhpBench\Attributes\Iterations;
 use PhpBench\Attributes\ParamProviders;
@@ -11,7 +14,7 @@ use PhpBench\Attributes\RetryThreshold;
 use PhpBench\Attributes\Revs;
 
 #[
-    Revs(5000),
+    Revs(2000),
     Iterations(10),
     RetryThreshold(2),
     ParamProviders(['provideCasts', 'provideClass'])
@@ -28,7 +31,7 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
     #[BeforeMethods('createModel')]
     public function benchGetAttribute(array $params)
     {
-        $field = $params['cast'] . '_field';
+        $field = ($params['column_name'] ?? $params['cast']).'_field';
 
         return [$this->model->$field];
     }
@@ -36,9 +39,18 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
     #[BeforeMethods(['createModel', 'saveModel'])]
     public function benchIsDirty(array $params)
     {
-        $field = $params['cast'] . '_field';
+        $field = ($params['column_name'] ?? $params['cast']).'_field';
         $this->model->$field = $params['sample_data_2'];
         $this->model->isDirty();
+    }
+
+    public function benchAllOperations(array $params)
+    {
+        $this->createModel($params);
+        $this->saveModel();
+        $this->benchGetAttribute($params);
+        $this->benchIsDirty($params);
+        $this->saveModel();
     }
 
     public function afterRefreshingDatabase()
@@ -51,6 +63,9 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
                 $table->float('float_field')->nullable();
                 $table->boolean('boolean_field')->nullable();
                 $table->json('array_field')->nullable();
+                $table->json('collection_field')->nullable();
+                $table->text('encrypted_array_field')->nullable();
+                $table->string('enum_field')->nullable();
                 $table->timestamps();
             });
         }
@@ -60,9 +75,9 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
     {
         $className = $params['class'];
         $this->model = new $className([
-            $params['cast'] . '_field' => $params['sample_data'],
+            ($params['column_name'] ?? $params['cast']).'_field' => $params['sample_data'],
         ], [
-            $params['cast'] . '_field' => $params['cast'],
+            ($params['column_name'] ?? $params['cast']).'_field' => $params['cast'],
         ]);
     }
 
@@ -74,9 +89,10 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
 
     public function provideClass()
     {
-        yield 'base' => ['class' => BenchmarkOriginalModel::class];
+        //        yield 'base' => ['class' => BenchmarkOriginalModel::class];
         yield 'improved' => ['class' => BenchmarkModel::class];
     }
+
     public function provideCasts()
     {
         yield 'datetime' => ['cast' => 'datetime', 'sample_data' => '2025-03-24 12:00:00', 'column_type' => 'timestamp', 'sample_data_2' => '2025-03-25 12:00:00'];
@@ -84,6 +100,9 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
         yield 'float' => ['cast' => 'float', 'sample_data' => 1234.56789, 'column_type' => 'float', 'sample_data_2' => 9876.54321];
         yield 'boolean' => ['cast' => 'boolean', 'sample_data' => true, 'column_type' => 'boolean', 'sample_data_2' => false];
         yield 'array' => ['cast' => 'array', 'sample_data' => ['foo' => 'bar'], 'column_type' => 'json', 'sample_data_2' => ['baz' => 'qux']];
+        yield 'collection' => ['cast' => 'array', 'sample_data' => ['foo' => 'bar'], 'column_type' => 'json', 'sample_data_2' => ['baz' => 'qux']];
+//        yield 'encrypted:array' => ['cast' => 'encrypted:array', 'column_name' => 'encrypted_array', 'sample_data' => ['foo' => 'bar'], 'column_type' => 'text', 'sample_data_2' => ['baz' => 'qux']];
+        yield 'enum' => ['cast' => BenchmarkEnum::class, 'column_name' => 'enum', 'sample_data' => BenchmarkEnum::SomeValue, 'column_type' => 'string', 'sample_data_2' => BenchmarkEnum::SomeValue2];
     }
 }
 
@@ -96,8 +115,7 @@ class BenchmarkModel extends Model
     public function __construct(
         array $attributes = [],
         array $casts = [],
-    )
-    {
+    ) {
         $this->casts = $casts;
         parent::__construct($attributes);
     }
@@ -110,4 +128,7 @@ class BenchmarkOriginalModel extends BenchmarkModel
         return $this->dateFormat ?: $this->getConnection()->getQueryGrammar()->getDateFormat();
     }
 }
+
+
+
 

@@ -43,7 +43,7 @@ class DatabaseCustomCastsTest extends DatabaseTestCase
         $model->array_object_json = ['name' => 'Taylor'];
         $model->collection = collect(['name' => 'Taylor']);
         $model->stringable = new Stringable('Taylor');
-        $model->password = Hash::make('secret');
+        $model->password = 'secret';
 
         $model->save();
 
