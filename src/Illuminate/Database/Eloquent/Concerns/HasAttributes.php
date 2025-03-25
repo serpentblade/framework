@@ -20,6 +20,8 @@ use Illuminate\Database\Eloquent\Casts\AsEncryptedCollection;
 use Illuminate\Database\Eloquent\Casts\AsEnumArrayObject;
 use Illuminate\Database\Eloquent\Casts\AsEnumCollection;
 use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Casts\Casters\Caster;
+use Illuminate\Database\Eloquent\Casts\Casters\ClosureCaster;
 use Illuminate\Database\Eloquent\Casts\Json;
 use Illuminate\Database\Eloquent\InvalidCastException;
 use Illuminate\Database\Eloquent\JsonEncodingException;
@@ -181,12 +183,11 @@ trait HasAttributes
     protected static $castTypeCache = [];
 
     /**
-     * The cache of date formats by connection
+     * The cache of date formats by connection.
      *
      * @var array
      */
     protected static $dateFormatByConnectionCache = [];
-
 
     /**
      * The encrypter instance that is used to encrypt attributes.
@@ -194,6 +195,14 @@ trait HasAttributes
      * @var \Illuminate\Contracts\Encryption\Encrypter|null
      */
     public static $encrypter;
+
+
+    /**
+     * Cache of casters
+     *
+     * @var array
+     */
+    protected static $casterCache = [];
 
     /**
      * Initialize the trait.
@@ -245,7 +254,6 @@ trait HasAttributes
     /**
      * Add the date attributes to the attributes array.
      *
-     * @param  array  $attributes
      * @return array
      */
     protected function addDateAttributesToArray(array $attributes)
@@ -266,8 +274,6 @@ trait HasAttributes
     /**
      * Add the mutated attributes to the attributes array.
      *
-     * @param  array  $attributes
-     * @param  array  $mutatedAttributes
      * @return array
      */
     protected function addMutatedAttributesToArray(array $attributes, array $mutatedAttributes)
@@ -294,8 +300,6 @@ trait HasAttributes
     /**
      * Add the casted attributes to the attributes array.
      *
-     * @param  array  $attributes
-     * @param  array  $mutatedAttributes
      * @return array
      */
     protected function addCastAttributesToArray(array $attributes, array $mutatedAttributes)
@@ -429,7 +433,6 @@ trait HasAttributes
     /**
      * Get an attribute array of all arrayable values.
      *
-     * @param  array  $values
      * @return array
      */
     protected function getArrayableItems(array $values)
@@ -1047,36 +1050,40 @@ trait HasAttributes
             $value = $this->fromDateTime($value);
         }
 
-        if ($this->isEnumCastable($key)) {
-            $this->setEnumCastableAttribute($key, $value);
-
-            return $this;
+        if ($caster = $this->getCaster($key)) {
+            $value = $caster->castFrom($key, $value);
         }
 
-        if ($this->isClassCastable($key)) {
-            $this->setClassCastableAttribute($key, $value);
-
-            return $this;
-        }
-
-        if (! is_null($value) && $this->isJsonCastable($key)) {
-            $value = $this->castAttributeAsJson($key, $value);
-        }
-
-        // If this attribute contains a JSON ->, we'll set the proper value in the
-        // attribute's underlying array. This takes care of properly nesting an
-        // attribute in the array's value in the case of deeply nested items.
-        if (str_contains($key, '->')) {
-            return $this->fillJsonAttribute($key, $value);
-        }
-
-        if (! is_null($value) && $this->isEncryptedCastable($key)) {
-            $value = $this->castAttributeAsEncryptedString($key, $value);
-        }
-
-        if (! is_null($value) && $this->hasCast($key, 'hashed')) {
-            $value = $this->castAttributeAsHashedString($key, $value);
-        }
+//        if ($this->isEnumCastable($key)) {
+//            $this->setEnumCastableAttribute($key, $value);
+//
+//            return $this;
+//        }
+//
+//        if ($this->isClassCastable($key)) {
+//            $this->setClassCastableAttribute($key, $value);
+//
+//            return $this;
+//        }
+//
+//        if (! is_null($value) && $this->isJsonCastable($key)) {
+//            $value = $this->castAttributeAsJson($key, $value);
+//        }
+//
+//        // If this attribute contains a JSON ->, we'll set the proper value in the
+//        // attribute's underlying array. This takes care of properly nesting an
+//        // attribute in the array's value in the case of deeply nested items.
+//        if (str_contains($key, '->')) {
+//            return $this->fillJsonAttribute($key, $value);
+//        }
+//
+//        if (! is_null($value) && $this->isEncryptedCastable($key)) {
+//            $value = $this->castAttributeAsEncryptedString($key, $value);
+//        }
+//
+//        if (! is_null($value) && $this->hasCast($key, 'hashed')) {
+//            $value = $this->castAttributeAsHashedString($key, $value);
+//        }
 
         $this->attributes[$key] = $value;
 
@@ -1581,7 +1588,6 @@ trait HasAttributes
     /**
      * Prepare a date for array / JSON serialization.
      *
-     * @param  \DateTimeInterface  $date
      * @return string
      */
     protected function serializeDate(DateTimeInterface $date)
@@ -1944,7 +1950,6 @@ trait HasAttributes
     /**
      * Set the array of model attributes. No checking is done.
      *
-     * @param  array  $attributes
      * @param  bool  $sync
      * @return $this
      */
@@ -2234,34 +2239,40 @@ trait HasAttributes
             return true;
         } elseif (is_null($attribute)) {
             return false;
-        } elseif ($this->isDateAttribute($key) || $this->isDateCastableWithCustomFormat($key)) {
-            return $this->fromDateTime($attribute) ===
-                $this->fromDateTime($original);
-        } elseif ($this->hasCast($key, ['object', 'collection'])) {
-            return $this->fromJson($attribute) ===
-                $this->fromJson($original);
-        } elseif ($this->hasCast($key, ['real', 'float', 'double'])) {
-            if ($original === null) {
-                return false;
-            }
-
-            return abs($this->castAttribute($key, $attribute) - $this->castAttribute($key, $original)) < PHP_FLOAT_EPSILON * 4;
-        } elseif ($this->isEncryptedCastable($key) && ! empty(static::currentEncrypter()->getPreviousKeys())) {
-            return false;
-        } elseif ($this->hasCast($key, static::$primitiveCastTypes)) {
-            return $this->castAttribute($key, $attribute) ===
-                $this->castAttribute($key, $original);
-        } elseif ($this->isClassCastable($key) && Str::startsWith($this->getCasts()[$key], [AsArrayObject::class, AsCollection::class])) {
-            return $this->fromJson($attribute) === $this->fromJson($original);
-        } elseif ($this->isClassCastable($key) && Str::startsWith($this->getCasts()[$key], [AsEnumArrayObject::class, AsEnumCollection::class])) {
-            return $this->fromJson($attribute) === $this->fromJson($original);
-        } elseif ($this->isClassCastable($key) && $original !== null && Str::startsWith($this->getCasts()[$key], [AsEncryptedArrayObject::class, AsEncryptedCollection::class])) {
-            if (empty(static::currentEncrypter()->getPreviousKeys())) {
-                return $this->fromEncryptedString($attribute) === $this->fromEncryptedString($original);
-            }
-
-            return false;
         }
+
+        if ($caster = $this->getCaster($key)) {
+            return $caster->isEquivalent($key, $attribute, $original);
+        }
+
+//        elseif ($this->isDateAttribute($key) || $this->isDateCastableWithCustomFormat($key)) {
+//            return $this->fromDateTime($attribute) ===
+//                $this->fromDateTime($original);
+//        } elseif ($this->hasCast($key, ['object', 'collection'])) {
+//            return $this->fromJson($attribute) ===
+//                $this->fromJson($original);
+//        } elseif ($this->hasCast($key, ['real', 'float', 'double'])) {
+//            if ($original === null) {
+//                return false;
+//            }
+//
+//            return abs($this->castAttribute($key, $attribute) - $this->castAttribute($key, $original)) < PHP_FLOAT_EPSILON * 4;
+//        } elseif ($this->isEncryptedCastable($key) && ! empty(static::currentEncrypter()->getPreviousKeys())) {
+//            return false;
+//        } elseif ($this->hasCast($key, static::$primitiveCastTypes)) {
+//            return $this->castAttribute($key, $attribute) ===
+//                $this->castAttribute($key, $original);
+//        } elseif ($this->isClassCastable($key) && Str::startsWith($this->getCasts()[$key], [AsArrayObject::class, AsCollection::class])) {
+//            return $this->fromJson($attribute) === $this->fromJson($original);
+//        } elseif ($this->isClassCastable($key) && Str::startsWith($this->getCasts()[$key], [AsEnumArrayObject::class, AsEnumCollection::class])) {
+//            return $this->fromJson($attribute) === $this->fromJson($original);
+//        } elseif ($this->isClassCastable($key) && $original !== null && Str::startsWith($this->getCasts()[$key], [AsEncryptedArrayObject::class, AsEncryptedCollection::class])) {
+//            if (empty(static::currentEncrypter()->getPreviousKeys())) {
+//                return $this->fromEncryptedString($attribute) === $this->fromEncryptedString($original);
+//            }
+//
+//            return false;
+//        }
 
         return is_numeric($attribute) && is_numeric($original)
             && strcmp((string) $attribute, (string) $original) === 0;
@@ -2338,7 +2349,6 @@ trait HasAttributes
     /**
      * Set the accessors to append to model arrays.
      *
-     * @param  array  $appends
      * @return $this
      */
     public function setAppends(array $appends)
@@ -2430,5 +2440,138 @@ trait HasAttributes
 
             return false;
         })->map->name->values()->all();
+    }
+
+    /**
+     * Gets Caster for the given key.
+     *
+     * @return Caster
+     */
+    protected function getCaster(string $key)
+    {
+        if (!isset(static::$casterCache[static::class][$key])) {
+            static::$casterCache[static::class][$key] = $this->resolveCaster($key);
+        }
+
+        return static::$casterCache[static::class][$key];
+    }
+
+    protected function resolveCaster($key)
+    {
+        $castType = $this->getCastType($key);
+
+        $caster = null;
+
+        switch ($castType) {
+            case 'int':
+            case 'integer':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => (int) $value,
+                    isEquivalent: fn($key, $current, $original) =>
+                        $this->castAttribute($key, $current) ===  $this->castAttribute($key, $original)
+                );
+                break;
+            case 'real':
+            case 'float':
+            case 'double':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->fromFloat($value),
+                    isEquivalent: function ($key, $current, $original) {
+                        if ($original === null) {
+                            return false;
+                        }
+
+                        return abs($this->castAttribute($key, $current) - $this->castAttribute($key, $original)) < PHP_FLOAT_EPSILON * 4;
+                    }
+                );
+                break;
+            case 'decimal':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asDecimal($value, explode(':', $this->getCasts()[$key], 2)[1]),
+                );
+                break;
+            case 'string':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => (string) $value,
+                );
+                break;
+            case 'bool':
+            case 'boolean':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => (bool) $value,
+                );
+                break;
+            case 'object':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->fromJson($value, true),
+                );
+                break;
+            case 'array':
+            case 'json':
+            case 'json:unicode':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->fromJson($value),
+                );
+                break;
+            case 'collection':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => new BaseCollection($this->fromJson($value)),
+                );
+                break;
+            case 'date':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asDate($value),
+                );
+                break;
+            case 'datetime':
+            case 'custom_datetime':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asDateTime($value),
+                );
+                break;
+            case 'immutable_date':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asDate($value)->toImmutable(),
+                );
+                break;
+            case 'immutable_custom_datetime':
+            case 'immutable_datetime':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asDateTime($value)->toImmutable(),
+                );
+                break;
+            case 'timestamp':
+                $caster = new ClosureCaster(
+                    fn ($key, $value) => $this->asTimestamp($value),
+                );
+                break;
+        }
+
+
+
+        if ($this->isEnumCastable($key)) {
+            $caster = new ClosureCaster(
+                fn ($key, $value) => $this->getEnumCastableAttributeValue($key, $value),
+            );
+        }
+
+        if ($this->isClassCastable($key)) {
+            $caster = new ClosureCaster(
+                fn ($key, $value) => $this->getClassCastableAttributeValue($key, $value),
+            );
+        }
+
+        // If the key is one of the encrypted castable types, we'll first decrypt
+        // the value and update the cast type so we may leverage the following
+        // logic for casting this value to any additionally specified types.
+        if ($this->isEncryptedCastable($key)) {
+            $originalCaster = $caster;
+            $caster = new ClosureCaster(
+                fn ($key, $value) => $originalCaster->castFrom($key, $this->fromEncryptedString($value)),
+                fn ($key, $value) => $this->castAttributeAsEncryptedString($key, $originalCaster->castTo($key, $value)),
+            );
+        }
+
+        return $caster;
     }
 }

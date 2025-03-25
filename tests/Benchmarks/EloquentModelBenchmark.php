@@ -11,7 +11,7 @@ use PhpBench\Attributes\RetryThreshold;
 use PhpBench\Attributes\Revs;
 
 #[
-    Revs(2000),
+    Revs(5000),
     Iterations(10),
     RetryThreshold(2),
     ParamProviders(['provideCasts', 'provideClass'])
@@ -20,18 +20,18 @@ class EloquentGetDateFormatBenchmark extends OrchestraBenchmark
 {
     protected BenchmarkModel $model;
 
-//    public function benchConstructor(array $params)
-//    {
-//        $this->createModel($params);
-//    }
-//
-//    #[BeforeMethods('createModel')]
-//    public function benchGetAttribute(array $params)
-//    {
-//        $field = $params['cast'] . '_field';
-//
-//        return [$this->model->$field];
-//    }
+    public function benchConstructor(array $params)
+    {
+        $this->createModel($params);
+    }
+
+    #[BeforeMethods('createModel')]
+    public function benchGetAttribute(array $params)
+    {
+        $field = $params['cast'] . '_field';
+
+        return [$this->model->$field];
+    }
 
     #[BeforeMethods(['createModel', 'saveModel'])]
     public function benchIsDirty(array $params)
