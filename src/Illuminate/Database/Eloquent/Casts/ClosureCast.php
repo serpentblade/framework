@@ -63,6 +63,12 @@ class ClosureCast implements CastsAttributes, ComparesCastableAttributes
 
     /**
      * Transform the attribute from the underlying model values.
+     *
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @param  string  $key
+     * @param  mixed  $value
+     * @param  array<string, mixed>  $attributes
+     * @return mixed
      */
     public function get($model, string $key, mixed $value, array $attributes)
     {
@@ -75,6 +81,12 @@ class ClosureCast implements CastsAttributes, ComparesCastableAttributes
 
     /**
      * Transform the attribute to its underlying model values.
+     *
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @param  string  $key
+     * @param  mixed  $value
+     * @param  array<string, mixed>  $attributes
+     * @return mixed
      */
     public function set($model, string $key, mixed $value, array $attributes)
     {
@@ -83,6 +95,12 @@ class ClosureCast implements CastsAttributes, ComparesCastableAttributes
 
     /**
      * Determine if the given values are equal.
+     *
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @param  string  $key
+     * @param  mixed  $firstValue
+     * @param  mixed  $secondValue
+     * @return bool
      */
     public function compare($model, string $key, mixed $firstValue, mixed $secondValue)
     {
