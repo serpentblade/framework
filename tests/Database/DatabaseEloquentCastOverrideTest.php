@@ -107,10 +107,11 @@ class DatabaseEloquentCastOverrideTest extends TestCase
 
     public function testResolveCastTypeOverrideIsHonoredAndClassIsolated()
     {
-        // Two classes map the same raw cast string ('shared') to different types
-        // via a resolveCastType() override. The cast-type cache is keyed per
-        // class, so resolving one first must not make the other inherit its
-        // normalization (the bug a global cache would cause).
+        // A full resolveCastType() override replaces the whole method, including
+        // the shared cast-type cache lookup, so it short-circuits before the
+        // global cache is ever consulted. Two classes mapping the same raw cast
+        // string ('shared') to different types therefore stay isolated even
+        // though the cache is shared across classes.
         $asInt = (new ResolveCastTypeIntModel([], ['x' => 'shared']))->newFromBuilder(['x' => '5']);
         $asString = (new ResolveCastTypeStringModel([], ['x' => 'shared']))->newFromBuilder(['x' => '5']);
 

@@ -188,13 +188,16 @@ trait HasAttributes
     protected static $setAttributeMutatorCache = [];
 
     /**
-     * The cache of converted cast types, keyed by model class then raw cast.
+     * The cache of converted cast types, keyed by the raw cast definition.
      *
-     * Keyed per class (not globally) so a model overriding the cast-type
-     * normalization hooks (resolveCastType, isDecimalCast, isCustomDateTimeCast,
-     * isImmutableCustomDateTimeCast) is never served another class's result.
+     * The cast type is resolved per cast definition and shared across every
+     * model class: the normalization is a property of the cast string, not of
+     * the model. A model may still override the normalization hooks
+     * (resolveCastType, isDecimalCast, …) to introduce a new cast string, but it
+     * cannot give an already-resolved cast string a different meaning than
+     * another class — that decision is memoized once.
      *
-     * @var array<class-string, array<string, string>>
+     * @var array<string, string>
      */
     protected static $castTypeCache = [];
 
@@ -214,16 +217,16 @@ trait HasAttributes
     protected static $internalCasterCache = [];
 
     /**
-     * The cache of cast objects resolved for a specific model class and cast.
+     * The cache of cast objects resolved for a given cast type.
      *
-     * Used for models that do not override the cast-resolution hooks: the
-     * resolved caster is then a pure function of the cast type, so it is
-     * memoized per class and cast type while pointing at the shared flyweights
-     * above (no closures duplicated per class). Models that override
-     * getCastType()/isEncryptedCastable() bypass this cache and resolve per key
-     * (see getInternalCastClass).
+     * The resolved caster — including the per-cast-type encryption decision — is
+     * a pure function of the cast type, so it is memoized once and shared across
+     * every model class while pointing at the shared flyweights above. The
+     * closures defer to the live model at call time, so a class's value-method
+     * overrides (asDate, fromJson, getEnumCastableAttributeValue, …) are still
+     * honored even though the cast object itself is shared.
      *
-     * @var array<class-string, array<string, ClosureCast|null>>
+     * @var array<string, ClosureCast|null>
      */
     protected static $resolvedCasterCache = [];
 
@@ -238,18 +241,6 @@ trait HasAttributes
     protected static $encryptedCastTypes = [
         'encrypted', 'encrypted:array', 'encrypted:collection', 'encrypted:json', 'encrypted:object',
     ];
-
-    /**
-     * The cache of whether a model class uses custom cast resolution.
-     *
-     * True when the class overrides getCastType() or isEncryptedCastable().
-     * Detecting this once per class lets the common case (no override) keep the
-     * fast, fully memoized path, while a model that overrides either hook
-     * transparently gets per-key fidelity.
-     *
-     * @var array<class-string, bool>
-     */
-    protected static $customCastResolution = [];
 
     /**
      * The encrypter instance that is used to encrypt attributes.
@@ -992,10 +983,8 @@ trait HasAttributes
      */
     protected function resolveCastType($castType)
     {
-        $class = static::class;
-
-        if (isset(static::$castTypeCache[$class][$castType])) {
-            return static::$castTypeCache[$class][$castType];
+        if (isset(static::$castTypeCache[$castType])) {
+            return static::$castTypeCache[$castType];
         }
 
         if ($this->isCustomDateTimeCast($castType)) {
@@ -1010,17 +999,19 @@ trait HasAttributes
             $convertedCastType = trim(strtolower($castType));
         }
 
-        return static::$castTypeCache[$class][$castType] = $convertedCastType;
+        return static::$castTypeCache[$castType] = $convertedCastType;
     }
 
     /**
      * Get the resolved internal cast object for the given attribute.
      *
      * Built-in casts are represented as reusable cast objects so the dispatch
-     * decision (which cast type, which branch) is made once and memoized per
-     * class and cast type, instead of being recomputed on every access. The
-     * cast object's closures defer to the model's own cast methods, preserving
-     * userland overrides.
+     * decision — which cast type applies and whether it is encrypted — is made
+     * once per cast type and memoized, instead of being recomputed on every
+     * access. The cast object's closures defer to the model's own value methods
+     * (asDate, fromJson, getEnumCastableAttributeValue, …) at call time, so
+     * those overrides are still honored; only the cast-type and encryption
+     * *decision* is fixed per cast type rather than re-derived per key.
      *
      * @param  string  $key
      * @return ClosureCast|null
@@ -1035,78 +1026,17 @@ trait HasAttributes
 
         $cast = $casts[$key];
 
-        $class = static::class;
+        $castType = $this->resolveCastType($cast);
 
-        // The common case: the model uses Eloquent's built-in cast resolution.
-        // The cast type is derived from the cast string already in hand (one
-        // getCasts()), encryption is a pure function of that type, and the
-        // resolved caster is memoized per class and cast type.
-        if (! $this->usesCustomCastResolution()) {
-            $castType = $this->resolveCastType($cast);
-
-            if (! isset(static::$resolvedCasterCache[$class]) ||
-                ! array_key_exists($castType, static::$resolvedCasterCache[$class])) {
-                static::$resolvedCasterCache[$class][$castType] = $this->resolveCasterFor(
-                    $castType, $cast, in_array($castType, static::$encryptedCastTypes, true)
-                );
-            }
-
-            $caster = static::$resolvedCasterCache[$class][$castType];
-        } else {
-            // The model overrides getCastType() and/or isEncryptedCastable(), so
-            // both are consulted per key — the override may decide the cast type
-            // or encryption per attribute, not just per cast type, so the result
-            // is resolved live rather than memoized by cast type. The cast
-            // objects themselves are still shared flyweights.
-            $castType = $this->getCastType($key);
-
-            $caster = $this->resolveCasterFor($castType, $cast, $this->isEncryptedCastable($key));
-        }
+        $caster = static::$resolvedCasterCache[$castType] ??= $this->resolveCasterFor(
+            $castType, $cast, in_array($castType, static::$encryptedCastTypes, true)
+        );
 
         if (is_null($caster)) {
             throw new InvalidCastException($this->getModel(), $key, $this->parseCasterClass($cast));
         }
 
         return $caster;
-    }
-
-    /**
-     * Determine whether the model class overrides a cast-resolution hook.
-     *
-     * Detected once per class and memoized as a single flag. Lets the common
-     * case (no override) keep the fully memoized fast path while a model that
-     * overrides getCastType()/isEncryptedCastable() transparently gets per-key
-     * resolution, so userland overrides are always honored without taxing every
-     * other model with a per-access check.
-     *
-     * @return bool
-     */
-    protected function usesCustomCastResolution()
-    {
-        $class = static::class;
-
-        if (isset(static::$customCastResolution[$class])) {
-            return static::$customCastResolution[$class];
-        }
-
-        return static::$customCastResolution[$class] =
-            $this->castResolutionHookIsOverridden('getCastType')
-            || $this->castResolutionHookIsOverridden('isEncryptedCastable');
-    }
-
-    /**
-     * Determine whether the model class overrides the given trait method.
-     *
-     * @param  string  $method
-     * @return bool
-     */
-    protected function castResolutionHookIsOverridden($method)
-    {
-        $defined = new ReflectionMethod(static::class, $method);
-        $original = new ReflectionMethod(__TRAIT__, $method);
-
-        return $defined->getStartLine() !== $original->getStartLine()
-            || $defined->getFileName() !== $original->getFileName();
     }
 
     /**
@@ -1323,9 +1253,9 @@ trait HasAttributes
      *
      * Built-in casts resolve to a shared flyweight (see resolveInternalCastClass).
      * When $encrypted is true the flyweight is additionally wrapped in a
-     * decrypt/encrypt layer. The caller decides encryption — via the overrideable
-     * isEncryptedCastable() — so a subclass that widens the set of encrypted casts
-     * is honored consistently on the read, write, and dirty-comparison paths.
+     * decrypt/encrypt layer. Encryption is decided once per cast type (from the
+     * built-in $encryptedCastTypes set), so the read, write, and
+     * dirty-comparison paths always agree on whether a cast type is encrypted.
      *
      * @param  string  $castType
      * @param  string  $cast

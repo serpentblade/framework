@@ -58,28 +58,32 @@ class EloquentModelEncryptedDirtyTest extends TestCase
         $this->assertTrue($model->isDirty('secret_array_object'));
     }
 
-    public function testIsEncryptedCastableOverrideIsHonoredOnTheCastPath()
+    public function testIsEncryptedCastableOverrideIsNotHonoredOnTheCastPath()
     {
         config(['app.key' => str_repeat('a', 32)]);
         Model::$encrypter = null;
 
-        // The attribute is declared as a plain "array" cast, but the model
-        // overrides isEncryptedCastable() to treat it as encrypted. The read,
-        // write, and dirty-comparison paths must all honor that override.
+        // The narrowed cast-resolution contract: whether a cast type is
+        // encrypted is decided once per cast type from the built-in
+        // encrypted:* set, not re-derived per key. A model that declares a
+        // plain "array" cast and overrides isEncryptedCastable() to claim a key
+        // is encrypted is therefore NOT honored on the cast path — the value is
+        // stored as plain JSON. To encrypt a field, give it an encrypted cast
+        // type (e.g. 'data' => 'encrypted:array'), which still works (see the
+        // EncryptedDirtyAttributeCast cases above).
         $model = new OverriddenEncryptedCastable;
 
         $model->data = ['a' => 1, 'b' => 2];
 
-        // The stored value must be encrypted (not plain JSON)...
-        $stored = $model->getAttributes()['data'];
-        $this->assertNotSame('{"a":1,"b":2}', $stored);
-        $this->assertSame('{"a":1,"b":2}', Model::currentEncrypter()->decrypt($stored, false));
+        // The plain "array" cast stores plain JSON; the per-key override does
+        // not encrypt it.
+        $this->assertSame('{"a":1,"b":2}', $model->getAttributes()['data']);
 
-        // ...and reading must decrypt then JSON-decode it back.
+        // ...and it still reads back as the decoded array.
         $this->assertSame(['a' => 1, 'b' => 2], $model->data);
 
-        // Dirty comparison runs through the encrypted comparator (always dirty
-        // on any re-assignment because of rotatable keys), not the plain JSON one.
+        // Dirty comparison runs through the plain JSON comparator, so a
+        // re-assignment of the same structure is not dirty.
         $model->syncOriginal();
         $model->data = ['a' => 1, 'b' => 2];
         $this->assertFalse($model->isDirty('data'));

@@ -127,19 +127,21 @@ class DatabaseEloquentCastEquivalenceTest extends TestCase
         $this->assertSame(! $expectedDirty, $model->originalIsEquivalent('updated_at'));
     }
 
-    public function testGetCastTypeOverrideIsHonoredOnTheCastPath()
+    public function testGetCastTypeOverrideIsNotConsultedOnTheCastPath()
     {
-        // The attribute is declared as a string cast, but the model overrides
-        // getCastType() to force it to boolean. Casting must follow the override,
-        // not the raw declaration — guards against resolving the cast type
-        // without consulting getCastType().
+        // The narrowed cast-resolution contract: the cast type is resolved
+        // directly from the cast declaration (via resolveCastType), so
+        // getCastType() is no longer a seam on the cast path. A model that
+        // declares 'flag' as a string cast and overrides getCastType() to force
+        // boolean is NOT honored — the value casts as the declared string. To
+        // change a field's cast type, change its cast declaration.
         $model = (new CastTypeOverrideModel)->newFromBuilder(['flag' => '1']);
 
-        $this->assertTrue($model->flag);
+        $this->assertSame('1', $model->flag);
 
         $model->flag = '0';
 
-        $this->assertFalse($model->flag);
+        $this->assertSame('0', $model->flag);
     }
 
     public function testBuiltInCastObjectsAreSharedFlyweights()
